@@ -3,11 +3,9 @@ package jenkinsci.plugins.telegrambot.telegram.commands;
 import jenkinsci.plugins.telegrambot.users.Subscribers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.chat.Chat;
 import org.telegram.telegrambots.meta.api.objects.User;
-import org.telegram.telegrambots.meta.bots.AbsSender;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import jenkinsci.plugins.telegrambot.telegram.TelegramBot;
 
 public class SubCommand extends AbstractBotCommand {
 
@@ -19,9 +17,11 @@ public class SubCommand extends AbstractBotCommand {
     }
 
     @Override
-    public void execute(AbsSender absSender, User user, Chat chat, String[] strings) {
+    public void execute(TelegramBot bot, User user, Chat chat, String[] arguments) {
+        LOGGER.info("Executing sub command for user: {}", user.getId());
+        
         Subscribers subscribers = Subscribers.getInstance();
-        String ans;
+        String messageText;
 
         Long id = chat.getId();
         String name = chat.isUserChat() ? user.toString() : chat.toString();
@@ -30,19 +30,11 @@ public class SubCommand extends AbstractBotCommand {
 
         if (!isSubscribed) {
             subscribers.subscribe(name, id);
-            ans = botStrings.get("message.sub.success");
+            messageText = botStrings.get("message.sub.success");
         } else {
-            ans = botStrings.get("message.sub.alreadysub");
+            messageText = botStrings.get("message.sub.alreadysub");
         }
 
-        SendMessage answer = new SendMessage();
-        answer.setChatId(chat.getId().toString());
-        answer.setText(ans);
-
-        try {
-            absSender.execute(answer);
-        } catch (TelegramApiException e) {
-            LOGGER.error(LOG_TAG, e);
-        }
+        bot.sendMessage(chat.getId(), messageText);
     }
 }

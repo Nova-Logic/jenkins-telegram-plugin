@@ -1,87 +1,67 @@
 package jenkinsci.plugins.telegrambot.telegram;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import hudson.FilePath;
-import hudson.ProxyConfiguration;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import jenkins.model.GlobalConfiguration;
 import jenkinsci.plugins.telegrambot.TelegramBotGlobalConfiguration;
 import jenkinsci.plugins.telegrambot.telegram.commands.*;
 import jenkinsci.plugins.telegrambot.users.Subscribers;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpHost;
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.conn.ssl.NoopHostnameVerifier;
-import org.apache.http.entity.BufferedHttpEntity;
-import org.apache.http.entity.ContentType;
-import org.apache.http.entity.StringEntity;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.impl.conn.DefaultProxyRoutePlanner;
-import org.apache.http.util.EntityUtils;
+import jenkinsci.plugins.telegrambot.utils.EmojiUtils;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
 import org.jenkinsci.plugins.tokenmacro.TokenMacro;
-import org.telegram.telegrambots.meta.api.methods.BotApiMethod;
+import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
+import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.objects.Chat;
-import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
+import org.telegram.telegrambots.meta.api.methods.send.SendVideo;
+import org.telegram.telegrambots.meta.api.methods.send.SendAudio;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
+import org.telegram.telegrambots.meta.api.objects.chat.Chat;
+import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.extensions.bots.commandbot.TelegramLongPollingCommandBot;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiValidationException;
+import org.telegram.telegrambots.meta.generics.TelegramClient;
 
+import java.io.File;
 import java.io.IOException;
-import java.io.Serializable;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
+import java.io.InputStream;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import static org.telegram.telegrambots.Constants.SOCKET_TIMEOUT;
-
-public class TelegramBot extends TelegramLongPollingCommandBot {
+public class TelegramBot implements LongPollingSingleThreadUpdateConsumer {
     private static final Logger LOG = Logger.getLogger(TelegramBot.class.getName());
 
     private static final TelegramBotGlobalConfiguration CONFIG = GlobalConfiguration.all().get(TelegramBotGlobalConfiguration.class);
     private static final Subscribers SUBSCRIBERS = Subscribers.getInstance();
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
     private final String token;
-    private volatile CloseableHttpClient httpclient;
-    private volatile RequestConfig requestConfig;
+    private final String botUsername;
+    private final TelegramClient telegramClient;
 
 
-    public TelegramBot(String token, String name) {
-        super(name);
+    public TelegramBot(String token, String botUsername) {
         this.token = token;
-
-        initializeProxy();
-
-        Arrays.asList(
-                new StartCommand(),
-                new HelpCommand(),
-                new SubCommand(),
-                new UnsubCommand(),
-                new StatusCommand()
-        ).forEach(this::register);
+        this.botUsername = botUsername;
+        this.telegramClient = new OkHttpTelegramClient(token);
     }
 
     public void sendMessage(Long chatId, String message) {
-        final SendMessage sendMessageRequest = new SendMessage();
-
-        sendMessageRequest.setChatId(chatId.toString());
-        sendMessageRequest.setText(message);
-        sendMessageRequest.enableMarkdown(true);
+        // Process emoji placeholders in direct messages too
+        String processedMessage = EmojiUtils.replaceEmojiPlaceholders(message);
+        
+        final SendMessage sendMessageRequest = SendMessage.builder()
+                .chatId(chatId.toString())
+                .text(processedMessage)
+                .parseMode("Markdown")
+                .build();
 
         try {
-            execute(sendMessageRequest);
+            telegramClient.execute(sendMessageRequest);
         } catch (TelegramApiException e) {
             LOG.log(Level.SEVERE, String.format(
-                    "TelegramBot: Error while sending message: %s%n%s", chatId, message), e);
+                    "TelegramBot: Error while sending message: %s%n%s", chatId, processedMessage), e);
         }
     }
 
@@ -89,12 +69,17 @@ public class TelegramBot extends TelegramLongPollingCommandBot {
             throws IOException, InterruptedException {
 
         try {
-            return TokenMacro.expandAll(run, filePath, taskListener, message);
+            // First expand token macros
+            String expandedMessage = TokenMacro.expandAll(run, filePath, taskListener, message);
+            
+            // Then process emoji placeholders
+            return EmojiUtils.replaceEmojiPlaceholders(expandedMessage);
         } catch (MacroEvaluationException e) {
             LOG.log(Level.SEVERE, "Error while expanding the message", e);
         }
 
-        return message;
+        // Fallback: still process emojis even if token expansion fails
+        return EmojiUtils.replaceEmojiPlaceholders(message);
     }
 
     public void sendMessage(
@@ -125,13 +110,228 @@ public class TelegramBot extends TelegramLongPollingCommandBot {
         sendMessage(null, message, run, filePath, taskListener);
     }
 
+    /**
+     * Send a file to a specific chat
+     */
+    public void telegramSendFile(Long chatId, File file, String caption) {
+        if (file == null || !file.exists()) {
+            LOG.log(Level.WARNING, "File is null or does not exist: " + file);
+            return;
+        }
+
+        final InputFile inputFile = new InputFile(file);
+        
+        try {
+            sendFileByType(chatId, inputFile, file.getName(), caption);
+        } catch (TelegramApiException e) {
+            LOG.log(Level.SEVERE, String.format(
+                    "TelegramBot: Error while sending file: %s to chat: %s", file.getName(), chatId), e);
+        }
+    }
+
+    /**
+     * Send a file from Jenkins FilePath using direct stream (no temp files)
+     */
+    public void telegramSendFile(Long chatId, FilePath filePath, String caption, TaskListener taskListener) 
+            throws IOException, InterruptedException {
+        if (filePath == null || !filePath.exists()) {
+            LOG.log(Level.WARNING, "FilePath is null or does not exist: " + filePath);
+            return;
+        }
+
+        if (filePath.isDirectory()) {
+            LOG.log(Level.WARNING, "Path is a directory, not a file: " + filePath.getRemote());
+            return;
+        }
+
+        // Send file directly using InputStream - no temp file needed
+        try (InputStream inputStream = filePath.read()) {
+            final InputFile inputFile = new InputFile(inputStream, filePath.getName());
+            
+            // Process emoji placeholders in caption and add file type emoji
+            String processedCaption = caption != null ? EmojiUtils.replaceEmojiPlaceholders(caption) : null;
+            String fileTypeEmoji = EmojiUtils.getFileTypeEmoji(filePath.getName());
+            
+            // Enhance caption with file type emoji if caption is provided
+            if (processedCaption != null && !processedCaption.isEmpty()) {
+                processedCaption = fileTypeEmoji + " " + processedCaption;
+            }
+            
+            sendFileByType(chatId, inputFile, filePath.getName(), processedCaption);
+            
+            if (CONFIG != null && CONFIG.isShouldLogToConsole() && taskListener != null) {
+                taskListener.getLogger().println("Sent file to Telegram: " + filePath.getName());
+            }
+        } catch (TelegramApiException e) {
+            LOG.log(Level.SEVERE, String.format(
+                    "TelegramBot: Error while sending file: %s to chat: %s", filePath.getName(), chatId), e);
+        }
+    }
+
+    /**
+     * Send a file to all approved subscribers
+     */
+    public void telegramSendFile(FilePath filePath, String caption, Run<?, ?> run, TaskListener taskListener) 
+            throws IOException, InterruptedException {
+        
+        final String expandedCaption = caption != null ? expandMessage(caption, run, filePath, taskListener) : null;
+        
+        try {
+            SUBSCRIBERS.getApprovedUsers().forEach(user -> {
+                try {
+                    telegramSendFile(user.getId(), filePath, expandedCaption, taskListener);
+                } catch (IOException | InterruptedException e) {
+                    LOG.log(Level.SEVERE, "Error sending file to user: " + user.getId(), e);
+                }
+            });
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error while sending file to subscribers", e);
+        }
+    }
+
+    /**
+     * Helper method to send file using appropriate Telegram method based on file extension
+     */
+    private void sendFileByType(Long chatId, InputFile inputFile, String fileName, String caption) throws TelegramApiException {
+        final String fileExtension = getFileExtension(fileName).toLowerCase();
+        
+        switch (fileExtension) {
+            case "jpg":
+            case "jpeg":
+            case "png":
+            case "gif":
+            case "webp":
+                sendPhoto(chatId, inputFile, caption);
+                break;
+            case "mp4":
+            case "avi":
+            case "mov":
+            case "mkv":
+                sendVideo(chatId, inputFile, caption);
+                break;
+            case "mp3":
+            case "wav":
+            case "flac":
+            case "ogg":
+            case "m4a":
+                sendAudio(chatId, inputFile, caption);
+                break;
+            default:
+                sendDocument(chatId, inputFile, caption);
+                break;
+        }
+    }
+
+    private void sendDocument(Long chatId, InputFile document, String caption) throws TelegramApiException {
+        final SendDocument.SendDocumentBuilder builder = SendDocument.builder()
+                .chatId(chatId.toString())
+                .document(document);
+                
+        if (caption != null && !caption.isEmpty()) {
+            builder.caption(caption).parseMode("Markdown");
+        }
+        
+        telegramClient.execute(builder.build());
+    }
+
+    private void sendPhoto(Long chatId, InputFile photo, String caption) throws TelegramApiException {
+        final SendPhoto.SendPhotoBuilder builder = SendPhoto.builder()
+                .chatId(chatId.toString())
+                .photo(photo);
+                
+        if (caption != null && !caption.isEmpty()) {
+            builder.caption(caption).parseMode("Markdown");
+        }
+        
+        telegramClient.execute(builder.build());
+    }
+
+    private void sendVideo(Long chatId, InputFile video, String caption) throws TelegramApiException {
+        final SendVideo.SendVideoBuilder builder = SendVideo.builder()
+                .chatId(chatId.toString())
+                .video(video);
+                
+        if (caption != null && !caption.isEmpty()) {
+            builder.caption(caption).parseMode("Markdown");
+        }
+        
+        telegramClient.execute(builder.build());
+    }
+
+    private void sendAudio(Long chatId, InputFile audio, String caption) throws TelegramApiException {
+        final SendAudio.SendAudioBuilder builder = SendAudio.builder()
+                .chatId(chatId.toString())
+                .audio(audio);
+                
+        if (caption != null && !caption.isEmpty()) {
+            builder.caption(caption).parseMode("Markdown");
+        }
+        
+        telegramClient.execute(builder.build());
+    }
+
+    private String getFileExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return "";
+        }
+        
+        int lastDotIndex = fileName.lastIndexOf('.');
+        if (lastDotIndex == -1 || lastDotIndex == fileName.length() - 1) {
+            return "";
+        }
+        
+        return fileName.substring(lastDotIndex + 1);
+    }
+
     @Override
-    public void processNonCommandUpdate(Update update) {
+    public void consume(Update update) {
         if (update == null) {
             LOG.log(Level.WARNING, "Update is null");
             return;
         }
 
+        if (update.hasMessage() && update.getMessage().hasText()) {
+            Message message = update.getMessage();
+            String messageText = message.getText();
+            Chat chat = message.getChat();
+
+            if (messageText.startsWith("/")) {
+                handleCommand(messageText, chat, message);
+            } else {
+                handleNonCommandUpdate(update);
+            }
+        }
+    }
+
+    private void handleCommand(String commandText, Chat chat, Message message) {
+        String[] parts = commandText.split(" ");
+        String command = parts[0].toLowerCase();
+        
+        // Handle commands manually
+        switch (command) {
+            case "/start":
+                new StartCommand().execute(this, message.getFrom(), chat, parts);
+                break;
+            case "/help":
+                new HelpCommand().execute(this, message.getFrom(), chat, parts);
+                break;
+            case "/sub":
+                new SubCommand().execute(this, message.getFrom(), chat, parts);
+                break;
+            case "/unsub":
+                new UnsubCommand().execute(this, message.getFrom(), chat, parts);
+                break;
+            case "/status":
+                new StatusCommand().execute(this, message.getFrom(), chat, parts);
+                break;
+            default:
+                final String nonCommandMessage = CONFIG.getBotStrings().get("message.noncommand");
+                sendMessage(chat.getId(), nonCommandMessage);
+                break;
+        }
+    }
+
+    private void handleNonCommandUpdate(Update update) {
         final String nonCommandMessage = CONFIG.getBotStrings()
                 .get("message.noncommand");
 
@@ -149,7 +349,7 @@ public class TelegramBot extends TelegramLongPollingCommandBot {
             // Skip not direct messages in chats
             if (text.length() < 1 || text.charAt(0) != '@') return;
             final String[] tmp = text.split(" ");
-            if (tmp.length < 2 || !CONFIG.getBotName().equals(tmp[0].substring(1, tmp[0].length()))) return;
+            if (tmp.length < 2 || !botUsername.equals(tmp[0].substring(1, tmp[0].length()))) return;
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Something bad happened while message processing", e);
             return;
@@ -158,22 +358,12 @@ public class TelegramBot extends TelegramLongPollingCommandBot {
         sendMessage(chat.getId(), nonCommandMessage);
     }
 
-    @Override
     public String getBotToken() {
         return token;
     }
 
-    @Override
-    public <T extends Serializable, Method extends BotApiMethod<T>> T execute(Method method)
-            throws TelegramApiException {
-        if (method == null) throw new TelegramApiException("Parameter method can not be null");
-        return sendApiMethodWithProxy(method);
-    }
-
-    private HttpPost configuredHttpPost(String url) {
-        HttpPost httpPost = new HttpPost(url);
-        httpPost.setConfig(requestConfig);
-        return httpPost;
+    public String getBotUsername() {
+        return botUsername;
     }
 
     @Override
@@ -181,84 +371,4 @@ public class TelegramBot extends TelegramLongPollingCommandBot {
         return "TelegramBot{" + token + "}";
     }
 
-    private void initializeProxy() {
-        try {
-            HttpHost proxy = getProxy();
-            httpclient = getHttpClient(proxy);
-            requestConfig = getRequestConfig(proxy);
-            getOptions().setRequestConfig(requestConfig);
-            LOG.log(Level.INFO, "Proxy successfully initialized");
-        } catch (IOException e) {
-            LOG.log(Level.SEVERE, "TelegramBot: Failed to set proxy", e);
-        }
-    }
-
-    private HttpHost getProxy() throws IOException {
-        ProxyConfiguration proxyConfig = ProxyConfiguration.load();
-        if (proxyConfig != null) {
-            LOG.log(Level.FINE, String.format("Proxy settings: %s:%d", proxyConfig.name, proxyConfig.port));
-            return new HttpHost(proxyConfig.name, proxyConfig.port);
-        } else {
-            LOG.log(Level.FINE, "No proxy settings in Jenkins");
-            return null;
-        }
-    }
-
-    private CloseableHttpClient getHttpClient(HttpHost proxy) {
-        HttpClientBuilder builder = HttpClientBuilder.create()
-                .setSSLHostnameVerifier(new NoopHostnameVerifier())
-                .setConnectionTimeToLive(70, TimeUnit.SECONDS)
-                .setMaxConnTotal(100);
-        if (proxy != null) {
-            builder.setProxy(proxy)
-                    .setRoutePlanner(new DefaultProxyRoutePlanner(proxy));
-        }
-        return builder.build();
-    }
-
-    private RequestConfig getRequestConfig(HttpHost proxy) {
-        RequestConfig botRequestConfig = getOptions().getRequestConfig();
-        if (botRequestConfig == null) {
-            botRequestConfig = RequestConfig.custom()
-                    .setSocketTimeout(SOCKET_TIMEOUT)
-                    .setConnectTimeout(SOCKET_TIMEOUT)
-                    .setConnectionRequestTimeout(SOCKET_TIMEOUT)
-                    .build();
-        }
-        RequestConfig.Builder builder = RequestConfig.copy(botRequestConfig);
-        if (proxy != null) {
-            builder.setProxy(proxy);
-        }
-        return builder.build();
-    }
-
-    private <T extends Serializable, Method extends BotApiMethod<T>> T sendApiMethodWithProxy(
-            Method method) throws TelegramApiException {
-        try {
-            String responseContent = sendMethodRequest(method);
-            return method.deserializeResponse(responseContent);
-        } catch (IOException e) {
-            throw new TelegramApiException(
-                    String.format("Unable to execute %s method", method.getMethod()), e);
-        }
-    }
-
-    private <T extends Serializable, Method extends BotApiMethod<T>> String sendMethodRequest(
-            Method method) throws TelegramApiValidationException, IOException {
-        method.validate();
-        String url = getBaseUrl() + method.getMethod();
-        HttpPost httpPost = configuredHttpPost(url);
-        httpPost.addHeader("charset", StandardCharsets.UTF_8.name());
-        httpPost.setEntity(new StringEntity(
-                objectMapper.writeValueAsString(method), ContentType.APPLICATION_JSON));
-        return sendHttpPostRequest(httpPost);
-    }
-
-    private String sendHttpPostRequest(HttpPost httpPost) throws IOException {
-        try (CloseableHttpResponse response = httpclient.execute(httpPost)) {
-            HttpEntity httpEntity = response.getEntity();
-            BufferedHttpEntity bufferedHttpEntity = new BufferedHttpEntity(httpEntity);
-            return EntityUtils.toString(bufferedHttpEntity, StandardCharsets.UTF_8);
-        }
-    }
 }

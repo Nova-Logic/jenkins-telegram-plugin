@@ -6,11 +6,9 @@ import jenkinsci.plugins.telegrambot.users.Subscribers;
 import jenkinsci.plugins.telegrambot.users.UserApprover;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.chat.Chat;
 import org.telegram.telegrambots.meta.api.objects.User;
-import org.telegram.telegrambots.meta.bots.AbsSender;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import jenkinsci.plugins.telegrambot.telegram.TelegramBot;
 
 public class StatusCommand extends AbstractBotCommand {
 
@@ -24,9 +22,11 @@ public class StatusCommand extends AbstractBotCommand {
     }
 
     @Override
-    public void execute(AbsSender absSender, User user, Chat chat, String[] strings) {
+    public void execute(TelegramBot bot, User user, Chat chat, String[] arguments) {
+        LOGGER.info("Executing status command for user: {}", user.getId());
+        
         Subscribers subscribers = Subscribers.getInstance();
-        String toSend;
+        String messageText;
 
         Long id = chat.getId();
 
@@ -36,24 +36,16 @@ public class StatusCommand extends AbstractBotCommand {
             boolean isApproved = subscribers.isApproved(id);
 
             if (CONFIG.getApprovalType() == UserApprover.ApprovalType.ALL) {
-                toSend = botStrings.get("message.status.approved");
+                messageText = botStrings.get("message.status.approved");
             } else {
-                toSend = isApproved
+                messageText = isApproved
                         ? botStrings.get("message.status.approved")
                         : botStrings.get("message.status.unapproved");
             }
         } else {
-            toSend = botStrings.get("message.status.unsubscribed");
+            messageText = botStrings.get("message.status.unsubscribed");
         }
 
-        SendMessage answer = new SendMessage();
-        answer.setChatId(chat.getId().toString());
-        answer.setText(toSend);
-
-        try {
-            absSender.execute(answer);
-        } catch (TelegramApiException e) {
-            LOGGER.error(LOG_TAG, e);
-        }
+        bot.sendMessage(chat.getId(), messageText);
     }
 }

@@ -1,0 +1,9 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core"  xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form">
+    <f:entry title="File Path" field="filePath" description="Path to the file relative to workspace (e.g., target/myfile.zip, logs/build.log)">
+        <f:textbox/>
+    </f:entry>
+    <f:entry title="Caption (optional)" field="caption" description="Optional caption for the file. Supports token macro expansion (e.g., Build #${BUILD_NUMBER} artifacts)">
+        <f:textarea/>
+    </f:entry>
+</j:jelly>
