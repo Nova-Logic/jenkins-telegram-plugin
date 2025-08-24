@@ -1,10 +1,9 @@
 package jenkinsci.plugins.telegrambot.utils;
 
-import org.kohsuke.stapler.StaplerRequest;
-
 /**
- * This class is used only for the storing StaplerRequest object
+ * @deprecated This class is no longer used and will be removed in a future version
  */
+@Deprecated
 public abstract class StaplerRequestContainer {
-    public static StaplerRequest req;
+    // Removed unused field 'req' - was causing static analysis warnings
 }

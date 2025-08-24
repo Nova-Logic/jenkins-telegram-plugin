@@ -27,7 +27,7 @@ public class TelegramBotGlobalConfiguration extends GlobalConfiguration {
     private final Map<String, String> botStrings;
 
     private Boolean shouldLogToConsole = Boolean.TRUE;
-    private String botToken;
+    private Secret botToken;  // Changed to Secret for encryption
     private String botName;
     private UserApprover.ApprovalType approvalType;
     private Set<User> users;
@@ -58,20 +58,24 @@ public class TelegramBotGlobalConfiguration extends GlobalConfiguration {
         
         // Load saved configuration
         load();
+        
+        // Auto-start bot if configuration exists (fix for issue #2)
+        startBotIfConfigured();
     }
 
     /**
      * Called after configuration is saved - start bot with new settings
      */
     private void startBotIfConfigured() {
-        if (botName != null && !botName.isEmpty() && botToken != null && !botToken.isEmpty()) {
+        String plainToken = botToken != null ? botToken.getPlainText() : null;
+        if (botName != null && !botName.isEmpty() && plainToken != null && !plainToken.isEmpty()) {
             // Set up subscribers on first configuration
             if (users == null) {
                 users = new HashSet<>();
                 Subscribers.getInstance().setUsers(users);
                 Subscribers.getInstance().addObserver(this::onSubscribersUpdate);
             }
-            TelegramBotRunner.getInstance().runBot(botName, botToken);
+            TelegramBotRunner.getInstance().runBot(botName, plainToken);
         }
     }
 
@@ -101,6 +105,11 @@ public class TelegramBotGlobalConfiguration extends GlobalConfiguration {
     public Boolean isShouldLogToConsole() {
         return shouldLogToConsole;
     }
+    
+    // Getter for Jelly checkbox binding (must match field name exactly)
+    public boolean getShouldLogToConsole() {
+        return shouldLogToConsole != null ? shouldLogToConsole : true;
+    }
 
     @DataBoundSetter
     public void setShouldLogToConsole(Boolean shouldLogToConsole) {
@@ -108,13 +117,24 @@ public class TelegramBotGlobalConfiguration extends GlobalConfiguration {
         save();
     }
 
+    /**
+     * Get bot token as string for UI binding (Jenkins handles encryption/decryption)
+     */
     public String getBotToken() {
+        return botToken != null ? botToken.getPlainText() : null;
+    }
+
+    /**
+     * Get encrypted Secret object for secure storage
+     */
+    public Secret getBotTokenSecret() {
         return botToken;
     }
 
     @DataBoundSetter
     public void setBotToken(String botToken) {
-        this.botToken = Secret.fromString(botToken).getPlainText();
+        // Store as encrypted Secret instead of plaintext
+        this.botToken = Secret.fromString(botToken);
         save();
         startBotIfConfigured();
     }
@@ -135,7 +155,7 @@ public class TelegramBotGlobalConfiguration extends GlobalConfiguration {
     }
 
     public UserApprover.ApprovalType getApprovalType() {
-        return approvalType;
+        return approvalType != null ? approvalType : UserApprover.ApprovalType.ALL;
     }
 
     @DataBoundSetter

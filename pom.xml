@@ -15,17 +15,15 @@
 
     <name>Telegram Bot Plugin</name>
     <description>This plugin allows you to send messages from Jenkins jobs to Telegram chats</description>
-    <url>https://wiki.jenkins.io/display/JENKINS/Telegram+Notification+Plugin</url>
+    <url>https://plugins.jenkins.io/telegram-notifications</url>
 
     <properties>
 
         <!--Versions-->
-
-        <java.level>21</java.level>
         <jenkins.version>2.516.2</jenkins.version>
 
         <!--Maven plugins-->
-        <maven-compiler-plugin.version>3.3</maven-compiler-plugin.version>
+        <maven-compiler-plugin.version>3.6.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>2.18.1</maven-surefire-plugin.version>
         <jacoco.version>0.7.4.201502262128</jacoco.version>
 
@@ -74,9 +72,22 @@
     <licenses>
         <license>
             <name>MIT License</name>
-            <url>http://opensource.org/licenses/MIT</url>
+            <url>https://opensource.org/licenses/MIT</url>
         </license>
     </licenses>
+
+    <developers>
+        <developer>
+            <id>jenkinsci</id>
+            <name>Jenkins CI Community</name>
+            <url>https://github.com/jenkinsci</url>
+        </developer>
+    </developers>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/jenkinsci/telegram-notifications-plugin/issues</url>
+    </issueManagement>
 
     <repositories>
         <repository>
@@ -179,7 +190,6 @@
             <plugin>
                 <groupId>org.jenkins-ci.tools</groupId>
                 <artifactId>maven-hpi-plugin</artifactId>
-                <version>3.66</version>
                 <configuration>
                     <compatibleSinceVersion>1.0</compatibleSinceVersion>
                 </configuration>

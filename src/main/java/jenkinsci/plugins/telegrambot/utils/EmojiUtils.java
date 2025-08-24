@@ -206,8 +206,8 @@ public class EmojiUtils {
         String statusText = result != null ? result.toString() : "NOT_BUILT";
         String durationText = formatDuration(duration);
         
-        return String.format("%s **Build %s #%d**\n" +
-                           "%s Status: %s\n" +
+        return String.format("%s **Build %s #%d**%n" +
+                           "%s Status: %s%n" +
                            "%s Duration: %s",
                            JENKINS, jobName, buildNumber,
                            statusEmoji, statusText,
@@ -277,7 +277,7 @@ public class EmojiUtils {
      */
     public static String formatFileMessage(String fileName, String description) {
         String fileEmoji = getFileTypeEmoji(fileName);
-        return String.format("%s **%s**\n%s %s", 
+        return String.format("%s **%s**%n%s %s", 
                            fileEmoji, fileName,
                            DOCUMENT, description != null ? description : "File sent");
     }
